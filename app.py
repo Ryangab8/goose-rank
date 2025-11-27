@@ -275,6 +275,10 @@ def init_session_state():
         'ranking_in_progress': False,
         'total_comparisons': 0,
         'songs_ranked_count': 0,
+        # For initial head-to-head
+        'initial_matchup': True,
+        'song_a': None,
+        'song_b': None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -297,22 +301,46 @@ def get_filtered_pool(songs: list) -> list:
     return pool
 
 
+def setup_initial_matchup():
+    """Set up the first head-to-head matchup"""
+    if len(st.session_state.unranked_songs) >= 2:
+        st.session_state.song_a = st.session_state.unranked_songs[0]
+        st.session_state.song_b = st.session_state.unranked_songs[1]
+        st.session_state.initial_matchup = True
+
+
+def process_initial_choice(chose_a: bool):
+    """Process the initial head-to-head choice"""
+    st.session_state.total_comparisons += 1
+    
+    if chose_a:
+        # A is better - A is #1, B is #2
+        st.session_state.ranked_songs = [st.session_state.song_a, st.session_state.song_b]
+    else:
+        # B is better - B is #1, A is #2
+        st.session_state.ranked_songs = [st.session_state.song_b, st.session_state.song_a]
+    
+    # Remove both from unranked
+    st.session_state.unranked_songs.remove(st.session_state.song_a)
+    st.session_state.unranked_songs.remove(st.session_state.song_b)
+    
+    # Clear initial matchup state
+    st.session_state.initial_matchup = False
+    st.session_state.song_a = None
+    st.session_state.song_b = None
+    st.session_state.songs_ranked_count = 2
+    
+    # Auto-start next song if available
+    if st.session_state.unranked_songs:
+        start_ranking_song(st.session_state.unranked_songs[0])
+
+
 def start_ranking_song(song: dict):
     """Start ranking a new song using binary search"""
     st.session_state.current_song = song
     st.session_state.ranking_in_progress = True
-    
-    if not st.session_state.ranked_songs:
-        # First song - just add it
-        st.session_state.ranked_songs.append(song)
-        st.session_state.unranked_songs.remove(song)
-        st.session_state.current_song = None
-        st.session_state.ranking_in_progress = False
-        st.session_state.songs_ranked_count += 1
-    else:
-        # Set up binary search bounds
-        st.session_state.comparison_left = 0
-        st.session_state.comparison_right = len(st.session_state.ranked_songs) - 1
+    st.session_state.comparison_left = 0
+    st.session_state.comparison_right = len(st.session_state.ranked_songs) - 1
 
 
 def process_swipe(is_better: bool):
@@ -338,6 +366,10 @@ def process_swipe(is_better: bool):
         st.session_state.current_song = None
         st.session_state.ranking_in_progress = False
         st.session_state.songs_ranked_count += 1
+        
+        # Auto-start next song if available
+        if st.session_state.unranked_songs:
+            start_ranking_song(st.session_state.unranked_songs[0])
 
 
 def get_comparison_song() -> dict:
@@ -481,6 +513,9 @@ def main():
             st.session_state.unranked_songs = pool
             st.session_state.ranked_songs = []
             
+            # Set up initial head-to-head
+            setup_initial_matchup()
+            
             st.rerun()
         
         if not name:
@@ -505,81 +540,99 @@ def main():
         
         st.markdown("---")
         
-        # Check if ranking in progress
-        if st.session_state.ranking_in_progress and st.session_state.current_song:
+        # INITIAL HEAD-TO-HEAD MATCHUP
+        if st.session_state.initial_matchup and st.session_state.song_a and st.session_state.song_b:
+            song_a = st.session_state.song_a
+            song_b = st.session_state.song_b
+            
+            st.markdown("### 🎯 Which song do you prefer?")
+            st.markdown("*Pick your favorite to start building your rankings*")
+            
+            st.markdown("---")
+            
+            # Two cards side by side
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"""
+                <div class="tinder-card" style="min-height: 200px;">
+                    <div class="song-title" style="font-size: 1.5rem;">{song_a['name']}</div>
+                    <div class="song-artist">{song_a['artist']}</div>
+                    <div class="song-plays">Played {song_a.get('times_played', '?')}x</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"⬅️ {song_a['name']}", use_container_width=True, key="pick_a"):
+                    process_initial_choice(chose_a=True)
+                    st.rerun()
+            
+            with col2:
+                st.markdown(f"""
+                <div class="tinder-card" style="min-height: 200px;">
+                    <div class="song-title" style="font-size: 1.5rem;">{song_b['name']}</div>
+                    <div class="song-artist">{song_b['artist']}</div>
+                    <div class="song-plays">Played {song_b.get('times_played', '?')}x</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"{song_b['name']} ➡️", use_container_width=True, key="pick_b"):
+                    process_initial_choice(chose_a=False)
+                    st.rerun()
+        
+        # BINARY SEARCH COMPARISONS
+        elif st.session_state.ranking_in_progress and st.session_state.current_song:
             current = st.session_state.current_song
             comparison = get_comparison_song()
             
-            # Get comparison song's current position
-            mid = (st.session_state.comparison_left + st.session_state.comparison_right) // 2
-            comp_position = mid + 1
-            comp_score = get_beli_score(comp_position, len(st.session_state.ranked_songs))
+            st.markdown("### 🎯 Which song do you prefer?")
             
-            # Instructions
-            st.markdown("""
-            <div class="instruction-box">
-                <div class="instruction-text">
-                    ⬅️ <strong>LEFT</strong> = The ranked song is better &nbsp;&nbsp;|&nbsp;&nbsp;
-                    <strong>RIGHT</strong> = The new song is better ➡️
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("---")
             
-            # New song card
-            st.markdown(f"""
-            <div class="tinder-card">
-                <div class="song-title">{current['name']}</div>
-                <div class="song-artist">{current['artist']}</div>
-                <div class="song-plays">Played {current.get('times_played', '?')}x live</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # VS badge
-            st.markdown('<div style="text-align: center;"><span class="vs-badge">VS</span></div>', unsafe_allow_html=True)
-            
-            # Comparison song
-            st.markdown(f"""
-            <div class="comparison-song">
-                <div class="comparison-name">{comparison['name']} - {comparison['artist']}</div>
-                <div class="comparison-rank">Currently #{comp_position} • Score: {comp_score}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Swipe buttons
-            col1, col2, col3 = st.columns([2, 1, 2])
+            # Two cards side by side
+            col1, col2 = st.columns(2)
             
             with col1:
-                if st.button("⬅️ Ranked is Better", use_container_width=True, key="swipe_left"):
+                st.markdown(f"""
+                <div class="tinder-card" style="min-height: 200px;">
+                    <div class="song-title" style="font-size: 1.5rem;">{comparison['name']}</div>
+                    <div class="song-artist">{comparison['artist']}</div>
+                    <div class="song-plays">Played {comparison.get('times_played', '?')}x</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"⬅️ {comparison['name']}", use_container_width=True, key="swipe_left"):
                     process_swipe(is_better=False)
                     st.rerun()
             
-            with col3:
-                if st.button("New is Better ➡️", use_container_width=True, key="swipe_right"):
+            with col2:
+                st.markdown(f"""
+                <div class="tinder-card" style="min-height: 200px;">
+                    <div class="song-title" style="font-size: 1.5rem;">{current['name']}</div>
+                    <div class="song-artist">{current['artist']}</div>
+                    <div class="song-plays">Played {current.get('times_played', '?')}x</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button(f"{current['name']} ➡️", use_container_width=True, key="swipe_right"):
                     process_swipe(is_better=True)
                     st.rerun()
         
         elif st.session_state.unranked_songs:
-            # Show next song to rank
+            # Shouldn't normally get here, but handle edge case
             next_song = st.session_state.unranked_songs[0]
-            
-            st.markdown("### Next Song to Rank")
-            
-            st.markdown(f"""
-            <div class="tinder-card">
-                <div class="song-title">{next_song['name']}</div>
-                <div class="song-artist">{next_song['artist']}</div>
-                <div class="song-plays">Played {next_song.get('times_played', '?')}x live</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button("🎯 Rank This Song", type="primary", use_container_width=True):
-                start_ranking_song(next_song)
-                st.rerun()
-            
+            start_ranking_song(next_song)
+            st.rerun()
+        
+        else:
+            # All done!
+            st.markdown("### 🎉 All Done!")
+            st.markdown(f"You've ranked all {len(st.session_state.ranked_songs)} songs!")
+            st.markdown("Check out the **My Rankings** tab to see your results and share!")
+        
+        # Search section (always visible when not done)
+        if st.session_state.unranked_songs and not st.session_state.initial_matchup:
             st.markdown("---")
-            
-            # Manual add section
-            st.markdown("#### 🔍 Or search for a specific song")
+            st.markdown("#### 🔍 Search for a specific song to rank next")
             search = st.text_input("Search", placeholder="Search by name...", label_visibility="collapsed")
             
             if search:
@@ -592,14 +645,11 @@ def main():
                         st.markdown(f"**{song['name']}** - {song['artist']}")
                     with col2:
                         if st.button("Rank", key=f"search_{song['name']}"):
+                            # Move this song to front of queue
+                            st.session_state.unranked_songs.remove(song)
+                            st.session_state.unranked_songs.insert(0, song)
                             start_ranking_song(song)
                             st.rerun()
-        
-        else:
-            # All done!
-            st.markdown("### 🎉 All Done!")
-            st.markdown(f"You've ranked all {len(st.session_state.ranked_songs)} songs!")
-            st.markdown("Check out the **My Rankings** tab to see your results and share!")
     
     with tab2:
         st.markdown("### Your Rankings")
@@ -678,6 +728,10 @@ def main():
                 st.session_state.current_song = None
                 st.session_state.ranking_in_progress = False
                 st.session_state.total_comparisons = 0
+                st.session_state.initial_matchup = True
+                st.session_state.song_a = None
+                st.session_state.song_b = None
+                st.session_state.songs_ranked_count = 0
                 st.rerun()
     
     with tab3:
