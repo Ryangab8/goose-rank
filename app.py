@@ -2,7 +2,6 @@ import streamlit as st
 import json
 import base64
 from datetime import datetime
-import random
 
 # Page config
 st.set_page_config(
@@ -343,21 +342,35 @@ def start_ranking_song(song: dict):
     st.session_state.comparison_right = len(st.session_state.ranked_songs) - 1
 
 
+def skip_current_song():
+    """Skip the current song and move it to the end of the unranked list"""
+    if st.session_state.current_song:
+        # Move current song to end of unranked list
+        st.session_state.unranked_songs.remove(st.session_state.current_song)
+        st.session_state.unranked_songs.append(st.session_state.current_song)
+        st.session_state.current_song = None
+        st.session_state.ranking_in_progress = False
+
+        # Auto-start next song if available
+        if st.session_state.unranked_songs:
+            start_ranking_song(st.session_state.unranked_songs[0])
+
+
 def process_swipe(is_better: bool):
     """Process swipe - True if current song is better than comparison"""
     left = st.session_state.comparison_left
     right = st.session_state.comparison_right
     mid = (left + right) // 2
-    
+
     st.session_state.total_comparisons += 1
-    
+
     if is_better:
         # Current song is better, search upper half (lower indices)
         st.session_state.comparison_right = mid - 1
     else:
         # Comparison song is better, search lower half
         st.session_state.comparison_left = mid + 1
-    
+
     # Check if search is complete
     if st.session_state.comparison_left > st.session_state.comparison_right:
         insert_pos = st.session_state.comparison_left
@@ -366,7 +379,7 @@ def process_swipe(is_better: bool):
         st.session_state.current_song = None
         st.session_state.ranking_in_progress = False
         st.session_state.songs_ranked_count += 1
-        
+
         # Auto-start next song if available
         if st.session_state.unranked_songs:
             start_ranking_song(st.session_state.unranked_songs[0])
@@ -411,7 +424,7 @@ def main():
     
     # Header
     st.markdown('<h1 class="main-title">🪿 Goose Ranker</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle">Rank songs Tinder-style • Swipe to decide</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Rank your favorite Goose songs</p>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Check for shared rankings in URL
@@ -506,16 +519,16 @@ def main():
             st.session_state.pool_size = pool_size
             st.session_state.include_covers = (include_covers == "Yes")
             st.session_state.setup_complete = True
-            
-            # Initialize pool
+
+            # Initialize pool - keep sorted by play frequency (most played first)
             pool = get_filtered_pool(all_songs)
-            random.shuffle(pool)  # Randomize order for ranking
+            # Pool is already sorted by times_played in descending order from get_filtered_pool
             st.session_state.unranked_songs = pool
             st.session_state.ranked_songs = []
-            
+
             # Set up initial head-to-head
             setup_initial_matchup()
-            
+
             st.rerun()
         
         if not name:
@@ -583,14 +596,14 @@ def main():
         elif st.session_state.ranking_in_progress and st.session_state.current_song:
             current = st.session_state.current_song
             comparison = get_comparison_song()
-            
+
             st.markdown("### 🎯 Which song do you prefer?")
-            
+
             st.markdown("---")
-            
+
             # Two cards side by side
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 st.markdown(f"""
                 <div class="tinder-card" style="min-height: 200px;">
@@ -599,11 +612,11 @@ def main():
                     <div class="song-plays">Played {comparison.get('times_played', '?')}x</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 if st.button(f"⬅️ {comparison['name']}", use_container_width=True, key="swipe_left"):
                     process_swipe(is_better=False)
                     st.rerun()
-            
+
             with col2:
                 st.markdown(f"""
                 <div class="tinder-card" style="min-height: 200px;">
@@ -612,10 +625,16 @@ def main():
                     <div class="song-plays">Played {current.get('times_played', '?')}x</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
+
                 if st.button(f"{current['name']} ➡️", use_container_width=True, key="swipe_right"):
                     process_swipe(is_better=True)
                     st.rerun()
+
+            # Skip button
+            st.markdown("---")
+            if st.button("⏭️ Skip (too hard to choose)", type="secondary", use_container_width=True, key="skip_song"):
+                skip_current_song()
+                st.rerun()
         
         elif st.session_state.unranked_songs:
             # Shouldn't normally get here, but handle edge case
