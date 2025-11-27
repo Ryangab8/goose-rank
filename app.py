@@ -13,11 +13,13 @@ st.set_page_config(
 
 # Preset options for song pool size
 POOL_PRESETS = {
+    "Top 10": 10,
     "Top 25": 25,
     "Top 50": 50,
     "Top 100": 100,
     "Top 150": 150,
-    "All Songs": None
+    "All Songs": None,
+    "Custom": -1  # Special marker for custom input
 }
 
 # Custom CSS
@@ -264,6 +266,7 @@ def init_session_state():
     defaults = {
         'user_name': '',
         'pool_size': 'Top 50',
+        'custom_pool_size': '',
         'include_covers': True,
         'setup_complete': False,
         'ranked_songs': [],
@@ -278,6 +281,8 @@ def init_session_state():
         'initial_matchup': True,
         'song_a': None,
         'song_b': None,
+        # Undo functionality
+        'action_history': [],
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -287,16 +292,18 @@ def init_session_state():
 def get_filtered_pool(songs: list) -> list:
     """Get song pool based on settings"""
     pool = songs.copy()
-    
+
     if not st.session_state.include_covers:
         pool = [s for s in pool if s['category'] != 'cover']
-    
+
     pool.sort(key=lambda x: x.get('times_played', 0), reverse=True)
-    
+
     limit = POOL_PRESETS.get(st.session_state.pool_size)
+    if limit == -1:  # Custom option selected
+        limit = st.session_state.custom_pool_size
     if limit:
         pool = pool[:limit]
-    
+
     return pool
 
 
@@ -308,27 +315,67 @@ def setup_initial_matchup():
         st.session_state.initial_matchup = True
 
 
+def save_state_to_history():
+    """Save current state to history for undo"""
+    state_snapshot = {
+        'ranked_songs': st.session_state.ranked_songs.copy(),
+        'unranked_songs': st.session_state.unranked_songs.copy(),
+        'current_song': st.session_state.current_song,
+        'comparison_left': st.session_state.comparison_left,
+        'comparison_right': st.session_state.comparison_right,
+        'ranking_in_progress': st.session_state.ranking_in_progress,
+        'total_comparisons': st.session_state.total_comparisons,
+        'songs_ranked_count': st.session_state.songs_ranked_count,
+        'initial_matchup': st.session_state.initial_matchup,
+        'song_a': st.session_state.song_a,
+        'song_b': st.session_state.song_b,
+    }
+    st.session_state.action_history.append(state_snapshot)
+    # Keep history limited to last 20 actions to avoid memory issues
+    if len(st.session_state.action_history) > 20:
+        st.session_state.action_history.pop(0)
+
+
+def undo_last_action():
+    """Undo the last ranking action"""
+    if st.session_state.action_history:
+        previous_state = st.session_state.action_history.pop()
+        st.session_state.ranked_songs = previous_state['ranked_songs']
+        st.session_state.unranked_songs = previous_state['unranked_songs']
+        st.session_state.current_song = previous_state['current_song']
+        st.session_state.comparison_left = previous_state['comparison_left']
+        st.session_state.comparison_right = previous_state['comparison_right']
+        st.session_state.ranking_in_progress = previous_state['ranking_in_progress']
+        st.session_state.total_comparisons = previous_state['total_comparisons']
+        st.session_state.songs_ranked_count = previous_state['songs_ranked_count']
+        st.session_state.initial_matchup = previous_state['initial_matchup']
+        st.session_state.song_a = previous_state['song_a']
+        st.session_state.song_b = previous_state['song_b']
+
+
 def process_initial_choice(chose_a: bool):
     """Process the initial head-to-head choice"""
+    save_state_to_history()
+
     st.session_state.total_comparisons += 1
-    
+
     if chose_a:
         # A is better - A is #1, B is #2
         st.session_state.ranked_songs = [st.session_state.song_a, st.session_state.song_b]
     else:
         # B is better - B is #1, A is #2
         st.session_state.ranked_songs = [st.session_state.song_b, st.session_state.song_a]
-    
+
     # Remove both from unranked
     st.session_state.unranked_songs.remove(st.session_state.song_a)
     st.session_state.unranked_songs.remove(st.session_state.song_b)
-    
+
     # Clear initial matchup state
     st.session_state.initial_matchup = False
     st.session_state.song_a = None
     st.session_state.song_b = None
     st.session_state.songs_ranked_count = 2
-    
+
     # Auto-start next song if available
     if st.session_state.unranked_songs:
         start_ranking_song(st.session_state.unranked_songs[0])
@@ -358,6 +405,8 @@ def skip_current_song():
 
 def process_swipe(is_better: bool):
     """Process swipe - True if current song is better than comparison"""
+    save_state_to_history()
+
     left = st.session_state.comparison_left
     right = st.session_state.comparison_right
     mid = (left + right) // 2
@@ -471,11 +520,23 @@ def main():
             pool_size = st.radio(
                 "Select pool size",
                 list(POOL_PRESETS.keys()),
-                index=1,
+                index=2,
                 key="pool_radio",
                 label_visibility="collapsed"
             )
-        
+
+            # Show custom input if "Custom" is selected
+            custom_size = None
+            if pool_size == "Custom":
+                custom_size = st.number_input(
+                    "Enter number of songs",
+                    min_value=5,
+                    max_value=300,
+                    value=50,
+                    step=5,
+                    key="custom_input"
+                )
+
         with col2:
             st.markdown("#### 🎤 Include covers?")
             include_covers = st.radio(
@@ -485,7 +546,7 @@ def main():
                 key="covers_radio",
                 label_visibility="collapsed"
             )
-        
+
         # Preview
         st.markdown("---")
         preview_pool = all_songs.copy()
@@ -493,6 +554,8 @@ def main():
             preview_pool = [s for s in preview_pool if s['category'] != 'cover']
         preview_pool.sort(key=lambda x: x.get('times_played', 0), reverse=True)
         limit = POOL_PRESETS.get(pool_size)
+        if limit == -1:  # Custom option
+            limit = custom_size
         if limit:
             preview_pool = preview_pool[:limit]
         
@@ -517,6 +580,8 @@ def main():
         if st.button("🚀 Start Ranking!", type="primary", use_container_width=True, disabled=not name):
             st.session_state.user_name = name
             st.session_state.pool_size = pool_size
+            if pool_size == "Custom":
+                st.session_state.custom_pool_size = custom_size
             st.session_state.include_covers = (include_covers == "Yes")
             st.session_state.setup_complete = True
 
@@ -574,11 +639,11 @@ def main():
                     <div class="song-plays">Played {song_a.get('times_played', '?')}x</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                if st.button(f"⬅️ {song_a['name']}", use_container_width=True, key="pick_a"):
+
+                if st.button(f"{song_a['name']}", use_container_width=True, key="pick_a"):
                     process_initial_choice(chose_a=True)
                     st.rerun()
-            
+
             with col2:
                 st.markdown(f"""
                 <div class="tinder-card" style="min-height: 200px;">
@@ -587,8 +652,8 @@ def main():
                     <div class="song-plays">Played {song_b.get('times_played', '?')}x</div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                if st.button(f"{song_b['name']} ➡️", use_container_width=True, key="pick_b"):
+
+                if st.button(f"{song_b['name']}", use_container_width=True, key="pick_b"):
                     process_initial_choice(chose_a=False)
                     st.rerun()
         
@@ -613,7 +678,7 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
 
-                if st.button(f"⬅️ {comparison['name']}", use_container_width=True, key="swipe_left"):
+                if st.button(f"{comparison['name']}", use_container_width=True, key="swipe_left"):
                     process_swipe(is_better=False)
                     st.rerun()
 
@@ -626,15 +691,21 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
 
-                if st.button(f"{current['name']} ➡️", use_container_width=True, key="swipe_right"):
+                if st.button(f"{current['name']}", use_container_width=True, key="swipe_right"):
                     process_swipe(is_better=True)
                     st.rerun()
 
-            # Skip button
+            # Skip and Undo buttons
             st.markdown("---")
-            if st.button("⏭️ Skip (too hard to choose)", type="secondary", use_container_width=True, key="skip_song"):
-                skip_current_song()
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("↩️ Undo", type="secondary", use_container_width=True, key="undo_action", disabled=len(st.session_state.action_history) == 0):
+                    undo_last_action()
+                    st.rerun()
+            with col2:
+                if st.button("⏭️ Skip", type="secondary", use_container_width=True, key="skip_song"):
+                    skip_current_song()
+                    st.rerun()
         
         elif st.session_state.unranked_songs:
             # Shouldn't normally get here, but handle edge case
