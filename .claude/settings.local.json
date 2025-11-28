@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/SiteAnalysis/scripts/**)",
+      "Read(//c/SiteAnalysis/data/inputs/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
